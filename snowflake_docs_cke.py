@@ -28,13 +28,13 @@ def init_service_metadata():
 
     
     if "service_metadata" not in st.session_state:
-        services = session.sql("SHOW CORTEX SEARCH SERVICES IN cortex_knowledge_extension_snowflake_documentation.shared;").collect()
+        services = session.sql("SHOW CORTEX SEARCH SERVICES IN snowflake_documentation.shared;").collect()
         service_metadata = []
         if services:
             for s in services:
                 svc_name = s["name"]
                 svc_search_col = session.sql(
-                    f"DESC CORTEX SEARCH SERVICE cortex_knowledge_extension_snowflake_documentation.shared.{svc_name};"
+                    f"DESC CORTEX SEARCH SERVICE snowflake_documentation.shared.{svc_name};"
                 ).collect()[0]["search_column"]
                 service_metadata.append(
                     {"name": svc_name, "search_column": svc_search_col}
@@ -96,7 +96,7 @@ def query_cortex_search_service(query):
         tuple: (context_str, citations) where context_str is the concatenated string of context documents
               and citations is a list with a single citation from the first result.
     """
-    db, schema = 'cortex_knowledge_extension_snowflake_documentation', 'shared'
+    db, schema = 'snowflake_documentation', 'shared'
 
     cortex_search_service = (
         root.databases[db]
