@@ -3,6 +3,7 @@ from snowflake.core import Root # requires snowflake>=0.8.0
 from snowflake.snowpark.context import get_active_session
 
 MODELS = [
+    "claude-4-sonnet",
     "mistral-large",
     "snowflake-arctic",
     "llama3-70b",
@@ -63,6 +64,7 @@ def init_config_options():
     st.sidebar.button("Clear conversation", key="clear_conversation")
     st.sidebar.toggle("Debug", key="debug", value=False)
     st.sidebar.toggle("Use chat history", key="use_chat_history", value=True)
+    st.sidebar.toggle("Auto-translate Japanese to English", key="auto_translate", value=True)
 
     with st.sidebar.expander("Advanced options"):
         st.selectbox("Select model:", MODELS, key="model_name")
@@ -219,6 +221,53 @@ def make_chat_history_summary(chat_history, question):
 
     return summary
 
+def translate_query_to_english(query):
+    """
+    Translate a query from Japanese to English using Snowflake's TRANSLATE function.
+    If the query is already in English, translation is disabled, or translation fails, 
+    return the original query.
+
+    Args:
+        query (str): The query to potentially translate.
+
+    Returns:
+        str: The translated query in English, or the original query if translation is not needed/fails.
+    """
+    # Check if auto-translation is enabled
+    if not st.session_state.get("auto_translate", True):
+        return query
+        
+    try:
+        # Use Snowflake's TRANSLATE function to translate from Japanese to English
+        translated_result = session.sql(
+            "SELECT SNOWFLAKE.CORTEX.TRANSLATE(?, 'ja', 'en') as translated_text", 
+            (query,)
+        ).collect()
+        
+        if translated_result and len(translated_result) > 0:
+            translated_query = translated_result[0]['TRANSLATED_TEXT']
+            
+            # Check if translation actually occurred (simple heuristic)
+            # If the translated text is significantly different or contains English words,
+            # it's likely a translation occurred
+            if translated_query and translated_query.strip() != query.strip():
+                if st.session_state.debug:
+                    st.sidebar.text_area(
+                        "Query Translation", 
+                        f"Original: {query}\nTranslated: {translated_query}", 
+                        height=100
+                    )
+                return translated_query.strip()
+        
+        # If translation didn't occur or failed, return original
+        return query
+        
+    except Exception as e:
+        # If there's any error with translation, return the original query
+        if st.session_state.debug:
+            st.sidebar.error(f"Translation error: {str(e)}")
+        return query
+
 def create_prompt(user_question):
     """
     Create a prompt for the language model by combining the user question with context retrieved
@@ -232,16 +281,21 @@ def create_prompt(user_question):
         tuple: (prompt, citations) where prompt is the generated prompt for the language model
               and citations is the list of citation information.
     """
+    # Translate the question to English for better search results
+    english_question = translate_query_to_english(user_question)
+    
     if st.session_state.use_chat_history:
         chat_history = get_chat_history()
         if chat_history != []:
             question_summary = make_chat_history_summary(chat_history, user_question)
-            prompt_context, _ = query_cortex_search_service(question_summary)  # Context from modified query
-            _, citations = query_cortex_search_service(user_question)  # Citations from original query
+            # Translate the summary for search as well
+            english_summary = translate_query_to_english(question_summary)
+            prompt_context, _ = query_cortex_search_service(english_summary)  # Context from modified query
+            _, citations = query_cortex_search_service(english_question)  # Citations from original query
         else:
-            prompt_context, citations = query_cortex_search_service(user_question)
+            prompt_context, citations = query_cortex_search_service(english_question)
     else:
-        prompt_context, citations = query_cortex_search_service(user_question)
+        prompt_context, citations = query_cortex_search_service(english_question)
         chat_history = ""
 
     prompt = f"""
@@ -256,6 +310,8 @@ def create_prompt(user_question):
             just say "I don't know the answer to that question." Do not provide any citations at all, ever, in this case.
 
             Don't say things like "according to the provided context".
+            If you recieved query Japanese, you should translate query to English.
+            You should think English, but you should answer japanese language. 
 
             <chat_history>
             {chat_history}
